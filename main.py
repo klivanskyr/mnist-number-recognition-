@@ -241,8 +241,10 @@ def drawer(model):
             output = model(processed_image)
 
         predicted_class = output.argmax().item()
+        predicted_probability = output[0][predicted_class].item()
 
-        print(predicted_class)
+        text = pygame.font.render(f'Class: {predicted_class}, Probability: {predicted_probability:.2%}', True, (255, 255, 255))
+        screen.blit(text, (10, 10))
 
         if dragging:
             x, y = pygame.mouse.get_pos()
