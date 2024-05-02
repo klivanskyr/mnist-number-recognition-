@@ -10,8 +10,9 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.optim.lr_scheduler import StepLR
 import torchvision
-import torchvision.transforms.v2 as transforms
+from torchvision.transforms import v2 as T_v2
 import pygame
+import pygame.font
 import numpy as np
 from scipy.ndimage import gaussian_filter
 
@@ -19,25 +20,48 @@ class Model(nn.Module):
     def __init__(self):
         super().__init__()
         self.conv1 = nn.Conv2d(in_channels=1, out_channels=32, kernel_size=3, stride=1)
-        self.conv2 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride=1)
-        self.conv3 = nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3, stride=1)
-        self.dropout1 = nn.Dropout(0.25)
-        self.fc1 = nn.Linear(in_features=15488, out_features=128)
+        self.bn1 = nn.BatchNorm2d(num_features=32)
+        self.conv2 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, stride=1)
+        self.bn2 = nn.BatchNorm2d(num_features=32)
+        self.conv3 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=5, stride=2, padding=2)
+        self.bn3 = nn.BatchNorm2d(num_features=32)
+        self.conv4 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride=1)
+        self.bn4 = nn.BatchNorm2d(num_features=64)
+        self.conv5 = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, stride=1)
+        self.bn5 = nn.BatchNorm2d(num_features=64)
+        self.conv6 = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=5, stride=2, padding=2)
+        self.bn6 = nn.BatchNorm2d(num_features=64)
+        self.dropout1 = nn.Dropout(0.4)
+        self.fc1 = nn.Linear(in_features=1024, out_features=128)
+        self.bn7 = nn.BatchNorm1d(num_features=128)
         self.fc2 = nn.Linear(in_features=128, out_features=10)
 
     def forward(self, x):
         #Block 1
         x = self.conv1(x)
+        x = self.bn1(x)
+        x = F.relu(x)
+
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = F.relu(x)
+
+        x = self.conv3(x)
+        x = self.bn3(x)
         x = F.relu(x)
 
         #Block 2
-        x = self.conv2(x)
+        x = self.conv4(x)
+        x = self.bn4(x)
         x = F.relu(x)
 
-        #Block 3
-        x = self.conv3(x)
+        x = self.conv5(x)
+        x = self.bn5(x)
         x = F.relu(x)
-        x = F.max_pool2d(x, kernel_size=2)
+
+        x = self.conv6(x)
+        x = self.bn6(x)
+        x: torch.Tensor = F.relu(x)
 
         #Dropout and Flatten
         x = self.dropout1(x)
@@ -45,6 +69,7 @@ class Model(nn.Module):
 
         #Block 4
         x = self.fc1(x)
+        x = self.bn7(x)
         x = F.relu(x)
 
         #Block 5 SOFTMAX
@@ -104,9 +129,11 @@ def train_cnn(num_epochs):
     BATCH_SIZE = 128
     NUM_WORKERS = 4
 
-    preprocessing = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.RandomAffine(degrees=30, translate=(0.2,0.2), scale=(0.9, 1.1), shear=10)
+    preprocessing = T_v2.Compose([
+            T_v2.ToImage(),
+            T_v2.ToDtype(torch.float32, scale=True),
+            T_v2.RandomAffine(degrees=30, translate=(0.2,0.2), scale=(0.9, 1.1), shear=10),
+            T_v2.Normalize((0.1307,), (0.3081,))
         ])
 
     dataset_directory = ".." + os.sep + "data" + os.sep
@@ -206,13 +233,13 @@ def main():
 
 def drawer(model):
     pygame.init()
-
     pixel_height, pixel_width = 28, 28
     scale = 20
 
     screen = pygame.display.set_mode((pixel_height*scale, pixel_width*scale))
 
     pixels = np.zeros((pixel_height, pixel_width))
+    pixels[pixel_height // 2 - 1, pixel_width // 2 - 1] = 70
 
     running = True
     dragging = False
@@ -220,50 +247,57 @@ def drawer(model):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
-                pygame.quit()
             elif event.type == pygame.MOUSEBUTTONDOWN:
-                dragging = True
+                x, y = pygame.mouse.get_pos()
+                if button.collidepoint(x, y):
+                    pixels = np.zeros((pixel_height, pixel_width))
+                    pixels[pixel_height // 2 - 1, pixel_width // 2 - 1] = 70
+                else:
+                    dragging = True
+
             elif event.type == pygame.MOUSEBUTTONUP:
                 dragging = False
+
                 
-        preprocess = transforms.Compose([
-            transforms.ToPILImage(),  # Convert numpy array to PIL Image
-            transforms.Grayscale(),
-            transforms.Resize((28, 28)), #should be 28, 28 anyway
-            transforms.ToTensor()
+        preprocess = T_v2.Compose([
+            T_v2.ToPILImage(),  # Convert numpy array to PIL Image
+            T_v2.Grayscale(),
+            T_v2.Resize((28, 28)), #should be 28, 28 anyway
+            T_v2.ToImage(),
+            T_v2.ToDtype(torch.float32, scale=True),
+            T_v2.Normalize((0.1307,), (0.3081,))
         ])
 
-        processed_image = preprocess(pixels.astype(np.float32))
+        processed_image = preprocess(pixels)
         processed_image = processed_image.unsqueeze(0)
         model.eval()
 
         with torch.no_grad():
             output = model(processed_image)
 
-        predicted_class = output.argmax().item()
-        predicted_probability = output[0][predicted_class].item()
-
-        text = pygame.font.render(f'Class: {predicted_class}, Probability: {predicted_probability:.2%}', True, (255, 255, 255))
-        screen.blit(text, (10, 10))
+        softmax = torch.nn.Softmax(dim=1)
+        probabilites = softmax(output)
+        predicted_class = probabilites.argmax().item()
+        predicted_probability = probabilites[0][predicted_class].item()
 
         if dragging:
             x, y = pygame.mouse.get_pos()
             if 0 <= x < pixel_width*scale and 0 <= y < pixel_height*scale:  # Check if mouse position is within window
                 row, col = y // scale, x // scale
                 if row >= 0 and row < pixel_height and col >= 0 and col < pixel_width:
-                    pixels[row][col] = min(255, pixels[row][col] + 50)
+                    pixels[row][col] = min(255, pixels[row][col] + 100)
 
                 if row >= 0 and row < pixel_height and col - 1 >= 0 and col < pixel_width: #left
-                    pixels[row][col - 1] = min(255, pixels[row][col - 1] + 5)
+                    pixels[row][col - 1] = min(255, pixels[row][col - 1] + 10)
 
                 if row >= 0 and row < pixel_height and col + 1 < pixel_width: # right
-                    pixels[row][col + 1] = min(255, pixels[row][col + 1] + 5)
+                    pixels[row][col + 1] = min(255, pixels[row][col + 1] + 10)
 
                 if row - 1 >= 0 and col >= 0 and col < pixel_width: #up
-                    pixels[row - 1][col] = min(255, pixels[row - 1][col] + 5)
+                    pixels[row - 1][col] = min(255, pixels[row - 1][col] + 10)
 
                 if row + 1 < pixel_height and col >= 0 and col < pixel_width: #down
-                    pixels[row + 1][col] = min(255, pixels[row + 1][col] + 5)
+                    pixels[row + 1][col] = min(255, pixels[row + 1][col] + 10)
                 
                 #7x7 area around clicked pixel
                 top = max(0, row - 3)
@@ -271,7 +305,7 @@ def drawer(model):
                 left = max(0, col - 3)
                 right = min(pixel_width, col + 4)
                 region = pixels[top:bottom, left:right]
-                blurred_region = gaussian_filter(region, sigma=0.24)
+                blurred_region = gaussian_filter(region, sigma=0.3)
                 pixels[top:bottom, left:right] = blurred_region
 
         #Draw screen
@@ -279,8 +313,22 @@ def drawer(model):
             for col in range(pixel_width):
                 color = (pixels[row][col], pixels[row][col], pixels[row][col])
                 pygame.draw.rect(screen, color, pygame.Rect(col*scale, row*scale, scale, scale))
+        
+        #Text
+        text = pygame.font.SysFont("Arial", size=18)
+        surface = text.render(f'Prediction: {predicted_class}, Probability: {predicted_probability:.2%}', True, (255, 255, 255))
+        screen.blit(surface, (10, 10))
+
+        #Button
+        button = pygame.Rect(10, screen.get_height() - 60, 60, 25)
+        pygame.draw.rect(screen, (0,0,0), button)
+        button_text = text.render('Reset', True, (255, 0, 0))
+        screen.blit(button_text, (button.x + 5, button.y + 5))
+
 
         pygame.display.flip()
+    
+    pygame.quit()
 
 if __name__ == '__main__':
     main()
